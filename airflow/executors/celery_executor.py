@@ -17,6 +17,7 @@ import logging
 import subprocess
 import ssl
 import time
+import traceback
 
 from celery import Celery
 from celery import states as celery_states
@@ -47,7 +48,7 @@ class CeleryConfig(object):
     CELERYD_CONCURRENCY = configuration.getint('celery', 'CELERYD_CONCURRENCY')
     CELERY_DEFAULT_QUEUE = DEFAULT_QUEUE
     CELERY_DEFAULT_EXCHANGE = DEFAULT_QUEUE
-    if configuration.get('celery', 'CELERY_SSL_ACTIVE'):
+    if configuration.getboolean('celery', 'CELERY_SSL_ACTIVE'):
         try:
             BROKER_USE_SSL = {'keyfile': configuration.get('celery', 'CELERY_SSL_KEY'),
                               'certfile': configuration.get('celery', 'CELERY_SSL_CERT'),
@@ -101,23 +102,27 @@ class CeleryExecutor(BaseExecutor):
         self.logger.debug(
             "Inquiring about {} celery task(s)".format(len(self.tasks)))
         for key, async in list(self.tasks.items()):
-            state = async.state
-            if self.last_state[key] != state:
-                if state == celery_states.SUCCESS:
-                    self.success(key)
-                    del self.tasks[key]
-                    del self.last_state[key]
-                elif state == celery_states.FAILURE:
-                    self.fail(key)
-                    del self.tasks[key]
-                    del self.last_state[key]
-                elif state == celery_states.REVOKED:
-                    self.fail(key)
-                    del self.tasks[key]
-                    del self.last_state[key]
-                else:
-                    self.logger.info("Unexpected state: " + async.state)
-                self.last_state[key] = async.state
+            try:
+                state = async.state
+                if self.last_state[key] != state:
+                    if state == celery_states.SUCCESS:
+                        self.success(key)
+                        del self.tasks[key]
+                        del self.last_state[key]
+                    elif state == celery_states.FAILURE:
+                        self.fail(key)
+                        del self.tasks[key]
+                        del self.last_state[key]
+                    elif state == celery_states.REVOKED:
+                        self.fail(key)
+                        del self.tasks[key]
+                        del self.last_state[key]
+                    else:
+                        self.logger.info("Unexpected state: " + async.state)
+                    self.last_state[key] = async.state
+            except Exception as e:
+                logging.error("Error syncing the celery executor, ignoring "
+                              "it:\n{}\n".format(e, traceback.format_exc()))
 
     def end(self, synchronous=False):
         if synchronous:
